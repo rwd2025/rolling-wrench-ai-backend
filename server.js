@@ -304,15 +304,152 @@ app.post("/api/search", async (req, res) => {
 });
 
 
+
+/* ===== V1.3 PARTS MASTER EXTENSION ===== */
+const PARTS_MASTER = {
+  "3101874": {
+    query: "3101874",
+    category: "Filter",
+    type: "Oil filter / filter element",
+    confidence: "High for seeded cross-reference; verify application",
+    crosses: [
+      { brand: "Fleetguard", part_number: "LF634" },
+      { brand: "WIX", part_number: "51487" },
+      { brand: "NAPA", part_number: "1487" },
+      { brand: "Donaldson", part_number: "P550487" },
+      { brand: "Baldwin", part_number: "PT903" },
+      { brand: "Luber-Finer", part_number: "LP487" }
+    ],
+    oem: [
+      { brand: "Volvo", part_number: "3101874" },
+      { brand: "White", part_number: "3101874" },
+      { brand: "Volvo", part_number: "874487" },
+      { brand: "Cummins", part_number: "299634" },
+      { brand: "Case IH", part_number: "279294C91 / 279294C92" },
+      { brand: "Caterpillar", part_number: "3I1187" }
+    ],
+    verify: ["Old part label", "Thread/seal size", "Filter dimensions", "Application", "VIN/ESN"]
+  },
+  "LF634": {
+    query: "LF634",
+    category: "Filter",
+    type: "Fleetguard oil filter",
+    confidence: "High seeded cross-reference",
+    crosses: [
+      { brand: "Volvo/White", part_number: "3101874" },
+      { brand: "WIX", part_number: "51487" },
+      { brand: "NAPA", part_number: "1487" },
+      { brand: "Donaldson", part_number: "P550487" },
+      { brand: "Baldwin", part_number: "PT903" }
+    ],
+    oem: [{ brand: "Fleetguard", part_number: "LF634" }],
+    verify: ["Application", "Dimensions", "Seal/thread", "Old filter"]
+  },
+  "LF14000NN": {
+    query: "LF14000NN",
+    category: "Filter",
+    type: "Fleetguard lube filter, NanoNet style",
+    confidence: "Common heavy-duty Cummins filter number; verify by ESN",
+    crosses: [{ brand: "Fleetguard", part_number: "LF14000NN" }],
+    oem: [{ brand: "Cummins/Fleetguard", part_number: "LF14000NN" }],
+    verify: ["Engine serial number", "Filter head style", "Current filter label"]
+  },
+  "FS19727": {
+    query: "FS19727",
+    category: "Filter",
+    type: "Fleetguard fuel/water separator",
+    confidence: "Seeded common filter reference",
+    crosses: [
+      { brand: "Fleetguard", part_number: "FS19727" },
+      { brand: "NAPA", part_number: "3727" }
+    ],
+    oem: [{ brand: "Fleetguard", part_number: "FS19727" }],
+    verify: ["Micron rating", "Bowl/sensor style", "Thread", "Old filter"]
+  }
+};
+
+function findPartsMaster(q) {
+  const tokens = extractPartNumbers(q).map(x => String(x).replace(/[^A-Z0-9]/gi, "").toUpperCase());
+  for (const t of tokens) {
+    if (PARTS_MASTER[t]) return PARTS_MASTER[t];
+  }
+  return null;
+}
+
+function formatPartsMasterAnswer(p) {
+  const crosses = (p.crosses || []).map(x => `- **${x.brand}:** ${x.part_number}`).join("\n") || "- No verified crosses in local database.";
+  const oem = (p.oem || []).map(x => `- **${x.brand}:** ${x.part_number}`).join("\n") || "- No OEM references in local database.";
+  const verify = (p.verify || []).map(x => `- ${x}`).join("\n");
+  return `# Parts Master Result — ${p.query}
+
+## Identification
+- **Category:** ${p.category || "Unknown"}
+- **Type:** ${p.type || "Unknown"}
+- **Confidence:** ${p.confidence || "Verify before purchase"}
+
+## Cross References
+${crosses}
+
+## OEM / Related References
+${oem}
+
+## Verify Before Ordering
+${verify}
+
+## Supplier Script
+“Can you cross-reference **${p.query}** and verify it by application, dimensions, and old part label?”
+
+## Rolling Wrench Note
+Do not order by cross-reference alone. Confirm VIN/ESN/application and compare the old part.`;
+}
+
+function isWaterPumpRequest(q) {
+  const s = String(q || "").toLowerCase();
+  return s.includes("water pump") || s.includes("waterpump");
+}
+
+function formatWaterPumpRequest(q, context = {}) {
+  const truck = context.truck || {};
+  return `# Parts Master — Water Pump Request
+
+## Need More Info
+To give the correct OEM water pump number, I need one of these:
+
+- **Engine Serial Number (ESN)**
+- **VIN**
+- **Old water pump part number**
+- **Photo of pump label or casting**
+- **Truck year / make / model**
+- **Engine CPL**, if available
+
+## Current Context
+- **Engine:** ${truck.engine || "Not set"}
+- **Truck:** ${truck.unit || "Not set"}
+- **VIN:** ${truck.vin || "Not set"}
+
+## Why I’m Not Guessing
+Cummins X15/ISX water pumps can vary by engine serial number, CPL, pulley/housing style, chassis package, coolant pipe configuration, and reman/new option.
+
+## Supplier Script
+“I need the correct water pump for a Cummins X15. I can provide VIN/ESN. Please verify pump number, gasket/O-ring, pulley fitment, and core/reman option.”
+
+## Next Step
+Send the VIN, ESN, or a photo of the old pump label and I’ll cross-reference it.`;
+}
+
 app.get("/api/parts", (req, res) => {
   res.json({
     ok: true,
     endpoint: "/api/parts",
+    version: "parts_master_v1_3",
     method: "POST",
-    seeded_parts: Object.keys(SEEDED_PARTS),
-    example: {
-      prompt: "3101874 cross reference"
-    }
+    seeded_parts: Object.keys(PARTS_MASTER),
+    examples: [
+      { prompt: "3101874 cross reference" },
+      { prompt: "LF634 cross reference" },
+      { prompt: "Cummins X15 water pump" },
+      { prompt: "FS19727 cross reference" }
+    ]
   });
 });
 
@@ -320,6 +457,15 @@ app.post("/api/parts", async (req, res) => {
   try {
     const q = req.body.prompt || req.body.query || req.body.question || "";
     const context = req.body.context || {};
+
+    const master = findPartsMaster(q);
+    if (master) {
+      return res.json({
+        answer: formatPartsMasterAnswer(master),
+        match: master,
+        source: "parts_master_v1_3"
+      });
+    }
 
     const seeded = findSeededPart(q);
     if (seeded) {
@@ -330,6 +476,13 @@ app.post("/api/parts", async (req, res) => {
       });
     }
 
+    if (isWaterPumpRequest(q)) {
+      return res.json({
+        answer: formatWaterPumpRequest(q, context),
+        source: "parts_master_water_pump_request"
+      });
+    }
+
     if (!openai) return res.status(500).json({ error: "OPENAI_API_KEY is not configured." });
 
     const completion = await openai.chat.completions.create({
@@ -337,27 +490,22 @@ app.post("/api/parts", async (req, res) => {
       messages: [
         { role: "system", content: `${systemPrompt()}
 
-You are now in PARTS MODE.
+You are in PARTS MASTER MODE.
 Rules:
-- Do not invent exact OEM part numbers.
-- If exact match is not in seeded/local data, say NO VERIFIED MATCH FOUND.
-- Ask for VIN, ESN, old part number, photo of label, supplier, engine CPL, year/make/model.
-- If user provides a part number, identify likely category only if known.
-- Return phone-readable headings and bullets.` },
+- If the part is not in local seeded data, do NOT invent exact cross-reference numbers.
+- Be direct: “No verified match found in Parts Master yet.”
+- Ask for VIN, ESN, old part label, photo, year/make/model, engine CPL.
+- Provide supplier script and verification checklist.
+- Format with headings and bullets.` },
         { role: "user", content: `Parts request:
 ${q}
 
 Context:
 ${JSON.stringify(context, null, 2)}
 
-Return:
-1. Verified match if available
-2. Cross references if verified
-3. What must be verified
-4. Supplier questions
-5. Do not make up numbers.` }
+Return a Parts Master style answer. Do not make up cross references.` }
       ],
-      temperature: 0.1
+      temperature: 0.05
     });
 
     res.json({ answer: completion.choices?.[0]?.message?.content || "" });

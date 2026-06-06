@@ -76,3 +76,9 @@ For first test, Render/Railway is easiest.
 - POST /api/parts checks seeded cross-reference data before AI.
 - Seeded: 3101874 cross reference data.
 - Unknown parts return safer "no verified match" behavior instead of invented numbers.
+
+## V1.3 Parts Master
+- Adds Parts Master seeded database.
+- Adds 3101874, LF634, LF14000NN, FS19727.
+- Adds water pump request handling that asks for VIN/ESN instead of guessing.
+- Adds supplier scripts and verification checklist.
