@@ -11,6 +11,11 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 
 app.use(cors({ origin: process.env.CORS_ORIGIN || "*" }));
 app.use(express.json({ limit: "25mb" }));
 
+app.use((req, res, next) => {
+  console.log(`RWREQ ${new Date().toISOString()} ${req.method} ${req.path}`);
+  next();
+});
+
 const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : null;
@@ -55,6 +60,59 @@ function normalizeAnswer(data) {
   if (!data) return "";
   if (typeof data === "string") return data;
   return data.answer || data.text || data.message || data.content || JSON.stringify(data, null, 2);
+}
+
+
+function isWeatherQuery(q) {
+  return /\b(weather|temperature|forecast|rain|snow|wind|humidity|conditions)\b/i.test(String(q || ""));
+}
+
+function extractWeatherLocation(q) {
+  const s = String(q || "").replace(/[?!.]/g, " ");
+  const patterns = [
+    /weather\s+(?:today\s+)?(?:in|near|for)\s+(.+)/i,
+    /(?:temperature|forecast|conditions)\s+(?:today\s+)?(?:in|near|for)\s+(.+)/i,
+    /(?:in|near|for)\s+([A-Za-z\s]+,\s*[A-Z]{2})/i
+  ];
+  for (const p of patterns) {
+    const m = s.match(p);
+    if (m && m[1]) return m[1].trim();
+  }
+  return "Albion, Indiana";
+}
+
+async function getWeatherAnswer(q) {
+  const location = extractWeatherLocation(q);
+  const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(location)}&count=1&language=en&format=json`;
+  const geoRes = await fetch(geoUrl);
+  const geo = await geoRes.json();
+  const place = geo.results && geo.results[0];
+  if (!place) return `I could not find weather coordinates for ${location}. Try city and state, like Albion, Indiana.`;
+
+  const wxUrl = `https://api.open-meteo.com/v1/forecast?latitude=${place.latitude}&longitude=${place.longitude}&current=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,rain,snowfall,weather_code,wind_speed_10m,wind_gusts_10m&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=auto`;
+  const wxRes = await fetch(wxUrl);
+  const wx = await wxRes.json();
+  const c = wx.current || {};
+  const codeMap = {
+    0:"Clear sky",1:"Mainly clear",2:"Partly cloudy",3:"Overcast",45:"Fog",48:"Rime fog",
+    51:"Light drizzle",53:"Drizzle",55:"Heavy drizzle",61:"Light rain",63:"Rain",65:"Heavy rain",
+    71:"Light snow",73:"Snow",75:"Heavy snow",80:"Light rain showers",81:"Rain showers",82:"Heavy rain showers",
+    95:"Thunderstorm",96:"Thunderstorm with hail",99:"Severe thunderstorm with hail"
+  };
+  const desc = codeMap[c.weather_code] || "Current conditions";
+  const city = `${place.name}${place.admin1 ? ", " + place.admin1 : ""}`;
+
+  return `## Current Weather — ${city}
+
+- **Condition:** ${desc}
+- **Temperature:** ${Math.round(c.temperature_2m)}°F
+- **Feels like:** ${Math.round(c.apparent_temperature)}°F
+- **Humidity:** ${c.relative_humidity_2m}%
+- **Wind:** ${Math.round(c.wind_speed_10m)} mph
+- **Gusts:** ${Math.round(c.wind_gusts_10m || 0)} mph
+- **Rain/Snow now:** ${c.precipitation || 0} in
+
+Weather source: Open-Meteo live weather API.`;
 }
 
 app.get("/", (req, res) => {
@@ -135,6 +193,11 @@ app.post("/api/search", async (req, res) => {
     const q = req.body.prompt || req.body.query || req.body.question || "";
     if (!q) return res.status(400).json({ error: "Missing query." });
 
+    if (isWeatherQuery(q)) {
+      const answer = await getWeatherAnswer(q);
+      return res.json({ answer, source: "open-meteo" });
+    }
+
     if (process.env.WEB_SEARCH_ENDPOINT) {
       const r = await fetch(process.env.WEB_SEARCH_ENDPOINT, {
         method: "POST",
@@ -148,18 +211,18 @@ app.post("/api/search", async (req, res) => {
       return res.json({ answer: normalizeAnswer(data), raw: data });
     }
 
-    // Fallback: ask AI to explain that live search is not configured
     if (!openai) return res.status(500).json({ error: "Search endpoint and OpenAI are not configured." });
     const completion = await openai.chat.completions.create({
       model: process.env.OPENAI_MODEL || "gpt-4o-mini",
       messages: [
         { role: "system", content: systemPrompt() },
-        { role: "user", content: `The user asked for web/current info: ${q}\nExplain what you can without claiming live search, and say live search endpoint is not connected.` }
+        { role: "user", content: `The user asked: ${q}\nAnswer normally using your built-in knowledge. If the answer requires live/current data besides weather, clearly say live web search is not connected yet.` }
       ],
       temperature: 0.2
     });
     res.json({ answer: completion.choices?.[0]?.message?.content || "" });
   } catch (err) {
+    console.error("SEARCH_ERROR", err);
     res.status(500).json({ error: err.message });
   }
 });

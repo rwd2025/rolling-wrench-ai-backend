@@ -65,3 +65,8 @@ Good easy options:
 - Supabase Edge Functions later
 
 For first test, Render/Railway is easiest.
+
+## V1.1 update
+- Adds request logging so Render logs show POST /api/ai, /api/search, /api/vision.
+- Adds live weather support through Open-Meteo on /api/search.
+- Keeps OpenAI/Supabase endpoints.
