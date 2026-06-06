@@ -70,3 +70,9 @@ For first test, Render/Railway is easiest.
 - Adds request logging so Render logs show POST /api/ai, /api/search, /api/vision.
 - Adds live weather support through Open-Meteo on /api/search.
 - Keeps OpenAI/Supabase endpoints.
+
+## V1.2 Parts DB Fix
+- GET /api/parts now returns endpoint status.
+- POST /api/parts checks seeded cross-reference data before AI.
+- Seeded: 3101874 cross reference data.
+- Unknown parts return safer "no verified match" behavior instead of invented numbers.

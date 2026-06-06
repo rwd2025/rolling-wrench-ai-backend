@@ -115,6 +115,82 @@ async function getWeatherAnswer(q) {
 Weather source: Open-Meteo live weather API.`;
 }
 
+
+/* ===== V1.2 SEEDED PARTS CROSS REFERENCE DATABASE ===== */
+const SEEDED_PARTS = {
+  "3101874": {
+    query: "3101874",
+    verified_level: "seeded_web_reference",
+    part_type: "Oil filter / filter element",
+    notes: [
+      "3101874 appears as a Volvo / White reference number in filter cross-reference listings.",
+      "Do not treat this as a Cummins X15 water pump number.",
+      "Verify by VIN, ESN, old part label, filter dimensions, and supplier catalog before purchase."
+    ],
+    crosses: [
+      { brand: "Fleetguard", part_number: "LF634", confidence: "high" },
+      { brand: "WIX", part_number: "51487", confidence: "high" },
+      { brand: "Donaldson", part_number: "P550487", confidence: "medium-high" },
+      { brand: "Baldwin", part_number: "PT903", confidence: "medium-high" },
+      { brand: "Luber-Finer", part_number: "LP487", confidence: "medium" },
+      { brand: "NAPA", part_number: "1487", confidence: "medium" }
+    ],
+    oem_refs: [
+      { brand: "Volvo", part_number: "3101874" },
+      { brand: "Volvo", part_number: "874487" },
+      { brand: "White", part_number: "3101874" },
+      { brand: "Cummins", part_number: "299634" },
+      { brand: "Case IH", part_number: "279294C91" },
+      { brand: "Case IH", part_number: "279294C92" },
+      { brand: "Caterpillar", part_number: "3I1187" }
+    ]
+  }
+};
+
+function extractPartNumbers(q) {
+  return String(q || "").match(/\b[A-Z0-9-]{4,}\b/gi) || [];
+}
+
+function formatSeededPartAnswer(hit) {
+  const crosses = hit.crosses.map(x => `- **${x.brand}:** ${x.part_number} (${x.confidence})`).join("\n");
+  const refs = hit.oem_refs.map(x => `- **${x.brand}:** ${x.part_number}`).join("\n");
+  const notes = hit.notes.map(x => `- ${x}`).join("\n");
+  return `## Parts Cross Reference — ${hit.query}
+
+### Identification
+- **Part Type:** ${hit.part_type}
+- **Match Level:** ${hit.verified_level}
+
+### Cross References
+${crosses}
+
+### OEM / Related References
+${refs}
+
+### Important Notes
+${notes}
+
+### Supplier Check
+Ask supplier to verify:
+- Dimensions
+- Thread / seal style
+- Application
+- VIN / ESN
+- Old part label
+
+### Rolling Wrench Note
+This looks like a filter cross-reference number, not an X15 water pump number.`;
+}
+
+function findSeededPart(q) {
+  const nums = extractPartNumbers(q);
+  for (const n of nums) {
+    const clean = String(n).replace(/[^A-Z0-9]/gi, "").toUpperCase();
+    if (SEEDED_PARTS[clean]) return SEEDED_PARTS[clean];
+  }
+  return null;
+}
+
 app.get("/", (req, res) => {
   res.json({
     ok: true,
@@ -227,23 +303,66 @@ app.post("/api/search", async (req, res) => {
   }
 });
 
+
+app.get("/api/parts", (req, res) => {
+  res.json({
+    ok: true,
+    endpoint: "/api/parts",
+    method: "POST",
+    seeded_parts: Object.keys(SEEDED_PARTS),
+    example: {
+      prompt: "3101874 cross reference"
+    }
+  });
+});
+
 app.post("/api/parts", async (req, res) => {
   try {
-    const q = req.body.prompt || req.body.query || "";
+    const q = req.body.prompt || req.body.query || req.body.question || "";
     const context = req.body.context || {};
+
+    const seeded = findSeededPart(q);
+    if (seeded) {
+      return res.json({
+        answer: formatSeededPartAnswer(seeded),
+        match: seeded,
+        source: "seeded_parts_v1_2"
+      });
+    }
+
     if (!openai) return res.status(500).json({ error: "OPENAI_API_KEY is not configured." });
 
     const completion = await openai.chat.completions.create({
       model: process.env.OPENAI_MODEL || "gpt-4o-mini",
       messages: [
-        { role: "system", content: `${systemPrompt()}\nFor parts: provide likely part categories, what to verify, possible cross reference approach, and supplier questions. Do not invent exact OEM numbers unless supplied.` },
-        { role: "user", content: `Parts request:\n${q}\n\nContext:\n${JSON.stringify(context, null, 2)}` }
+        { role: "system", content: `${systemPrompt()}
+
+You are now in PARTS MODE.
+Rules:
+- Do not invent exact OEM part numbers.
+- If exact match is not in seeded/local data, say NO VERIFIED MATCH FOUND.
+- Ask for VIN, ESN, old part number, photo of label, supplier, engine CPL, year/make/model.
+- If user provides a part number, identify likely category only if known.
+- Return phone-readable headings and bullets.` },
+        { role: "user", content: `Parts request:
+${q}
+
+Context:
+${JSON.stringify(context, null, 2)}
+
+Return:
+1. Verified match if available
+2. Cross references if verified
+3. What must be verified
+4. Supplier questions
+5. Do not make up numbers.` }
       ],
-      temperature: 0.2
+      temperature: 0.1
     });
 
     res.json({ answer: completion.choices?.[0]?.message?.content || "" });
   } catch (err) {
+    console.error("PARTS_ERROR", err);
     res.status(500).json({ error: err.message });
   }
 });
