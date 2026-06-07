@@ -82,3 +82,5 @@ For first test, Render/Railway is easiest.
 - Adds 3101874, LF634, LF14000NN, FS19727.
 - Adds water pump request handling that asks for VIN/ESN instead of guessing.
 - Adds supplier scripts and verification checklist.
+
+V1.4: Adds /api/vin basic VIN decoder and Active Truck response.

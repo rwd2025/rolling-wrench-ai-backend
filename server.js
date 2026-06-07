@@ -191,6 +191,60 @@ function findSeededPart(q) {
   return null;
 }
 
+
+/* ===== V1.4 VIN DECODER ===== */
+function rwCleanVin(v){ return String(v || "").toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/g, ""); }
+function rwIsVin(v){ return /^[A-HJ-NPR-Z0-9]{17}$/.test(rwCleanVin(v)); }
+function rwExtractVin(text){
+  const m = String(text || "").toUpperCase().match(/[A-HJ-NPR-Z0-9]{17}/);
+  return m ? rwCleanVin(m[0]) : "";
+}
+function rwVinYear(code){
+  const map = {A:2010,B:2011,C:2012,D:2013,E:2014,F:2015,G:2016,H:2017,J:2018,K:2019,L:2020,M:2021,N:2022,P:2023,R:2024,S:2025,T:2026,V:2027,W:2028,X:2029,Y:2030,1:2001,2:2002,3:2003,4:2004,5:2005,6:2006,7:2007,8:2008,9:2009};
+  return map[code] || null;
+}
+function rwVinMake(wmi){
+  const known = {"1XP":"Peterbilt","2XP":"Peterbilt","3XP":"Peterbilt","1XK":"Kenworth","2XK":"Kenworth","3WK":"Kenworth","1HT":"International","2HS":"International","3HS":"International","4V4":"Volvo","4V5":"Volvo","4V1":"Volvo","1FU":"Freightliner","3AK":"Freightliner","1FV":"Freightliner","1M1":"Mack","1M2":"Mack","1GB":"Chevrolet/GMC Medium Duty","1GC":"Chevrolet","1FD":"Ford","1FT":"Ford"};
+  return known[wmi] || "Unknown";
+}
+function rwDecodeVin(vin){
+  const v = rwCleanVin(vin);
+  if(!rwIsVin(v)) throw new Error("Invalid VIN. VIN must be 17 characters.");
+  const truck = {
+    vin: v,
+    wmi: v.slice(0,3),
+    year: rwVinYear(v[9]),
+    make: rwVinMake(v.slice(0,3)),
+    model: "Verify by OEM build sheet",
+    engine: "Unknown — verify by ESN/data plate",
+    transmission: "Unknown — verify by build sheet",
+    confidence: "basic offline decode",
+    source: "vin_decoder_v1_4"
+  };
+  return truck;
+}
+function rwFormatVin(truck){
+  return `# VIN Decode — ${truck.vin}
+
+## Active Truck Profile
+- **Year:** ${truck.year || "Unknown"}
+- **Make:** ${truck.make}
+- **Model:** ${truck.model}
+- **Engine:** ${truck.engine}
+- **Transmission:** ${truck.transmission}
+- **Confidence:** ${truck.confidence}
+
+## Saved Context
+Use this VIN as the Active Truck context for parts, quotes, invoices, and repair memory.
+
+## Verify For Parts
+- Engine Serial Number
+- CPL
+- Old part number
+- Data plate
+- OEM build sheet`;
+}
+
 app.get("/", (req, res) => {
   res.json({
     ok: true,
@@ -436,6 +490,23 @@ Cummins X15/ISX water pumps can vary by engine serial number, CPL, pulley/housin
 ## Next Step
 Send the VIN, ESN, or a photo of the old pump label and I’ll cross-reference it.`;
 }
+
+
+app.get("/api/vin", (req, res) => {
+  res.json({ ok:true, endpoint:"/api/vin", version:"vin_decoder_v1_4", method:"POST" });
+});
+
+app.post("/api/vin", async (req, res) => {
+  try {
+    const vin = rwCleanVin(req.body.vin || rwExtractVin(req.body.prompt || req.body.question || ""));
+    if(!rwIsVin(vin)) return res.status(400).json({ error:"No valid 17-character VIN found." });
+    const truck = rwDecodeVin(vin);
+    res.json({ ok:true, truck, answer:rwFormatVin(truck), source:"vin_decoder_v1_4" });
+  } catch(err) {
+    console.error("VIN_ERROR", err);
+    res.status(500).json({ error:err.message });
+  }
+});
 
 app.get("/api/parts", (req, res) => {
   res.json({
