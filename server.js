@@ -541,6 +541,73 @@ ${oem}
 - Supplier catalog`;
 }
 
+
+/* ===== V1.5b formatPartsMasterAnswer compatibility hotfix ===== */
+function formatPartsMasterAnswer(part, q) {
+  if (!part) {
+    return `# Parts Master Result
+
+## No Verified Match Found
+No verified local Parts Master match was found for **${q || "this request"}**.
+
+## Need To Verify
+- VIN
+- ESN
+- Old part label
+- Application
+- Dimensions
+- Supplier catalog
+
+## Rolling Wrench Note
+Do not guess part numbers. Verify before ordering.`;
+  }
+
+  if (typeof formatSeededPartAnswer === "function") {
+    try {
+      const out = formatSeededPartAnswer(part, q);
+      if (out) return out;
+    } catch(e) {}
+  }
+
+  const crosses = (part.crosses || part.crossReferences || part.cross_refs || []).map(x => {
+    if (typeof x === "string") return `- ${x}`;
+    return `- **${x.brand || x.make || "Cross"}:** ${x.part_number || x.partNumber || x.number || ""}${x.confidence ? " (" + x.confidence + ")" : ""}`;
+  }).join("\n") || "- No cross references listed.";
+
+  const oem = (part.oem || part.oem_refs || part.oemRefs || []).map(x => {
+    if (typeof x === "string") return `- ${x}`;
+    return `- **${x.brand || x.make || "OEM"}:** ${x.part_number || x.partNumber || x.number || ""}`;
+  }).join("\n") || "- No OEM references listed.";
+
+  const notes = (part.notes || []).map(x => `- ${x}`).join("\n") || "- Verify before ordering.";
+
+  return `# Parts Master Result — ${part.query || part.part_number || part.partNumber || q || "Part"}
+
+## Identification
+- **Category:** ${part.category || "Unknown"}
+- **Type:** ${part.type || part.part_type || "Unknown"}
+- **Confidence:** ${part.confidence || part.verified_level || "Verify before purchase"}
+
+## Cross References
+${crosses}
+
+## OEM / Related References
+${oem}
+
+## Important Notes
+${notes}
+
+## Verify Before Ordering
+- VIN / ESN
+- Old part label
+- Dimensions
+- Application
+- Supplier catalog
+
+## Rolling Wrench Note
+Do not order by cross-reference alone. Confirm fitment before purchase.`;
+}
+
 app.post("/api/parts", async (req, res) => {
   try {
     const q = req.body.prompt || req.body.query || req.body.question || "";

@@ -96,3 +96,7 @@ V1.4: Adds /api/vin basic VIN decoder and Active Truck response.
 ## V1.5a Hotfix
 - Adds findPartsMaster() compatibility function.
 - Prevents ReferenceError: findPartsMaster is not defined.
+
+## V1.5b Hotfix
+- Adds formatPartsMasterAnswer() compatibility function.
+- Fixes ReferenceError: formatPartsMasterAnswer is not defined.
