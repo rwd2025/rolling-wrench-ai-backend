@@ -245,6 +245,90 @@ Use this VIN as the Active Truck context for parts, quotes, invoices, and repair
 - OEM build sheet`;
 }
 
+
+/* ===== V1.5 SEARCH ENGINE LAYER ===== */
+function rwSearchIntent(q){
+  const s = String(q || "").toLowerCase();
+  if (/\b(weather|temperature|forecast|rain|snow|wind)\b/.test(s)) return "weather";
+  if (/\b(near me|nearby|local|supplier|buy|price|availability|in stock|dealer|store|location)\b/.test(s)) return "supplier";
+  if (/\b(cross reference|cross-reference|xref|part number|oem|fleetguard|baldwin|donaldson|napa|wix|cummins part)\b/.test(s) || /\b[A-Z0-9-]{5,}\b/i.test(s)) return "parts";
+  if (/\b(today|current|latest|this year|who won|news|recall|price)\b/.test(s)) return "current";
+  return "general";
+}
+
+async function rwOpenAIWebSearch(q, context = {}) {
+  if (!openai) throw new Error("OPENAI_API_KEY is not configured.");
+
+  // Preferred: OpenAI Responses API with web_search_preview tool, if SDK supports responses.
+  if (openai.responses && openai.responses.create) {
+    try {
+      const response = await openai.responses.create({
+        model: process.env.OPENAI_SEARCH_MODEL || process.env.OPENAI_MODEL || "gpt-4o-mini",
+        tools: [{ type: "web_search_preview" }],
+        input: [
+          {
+            role: "system",
+            content: `You are Rolling Wrench AI with web search. Answer like ChatGPT/Gemini/Google.
+Use live web results when needed. For parts/suppliers, include sources, supplier names, what to verify, and confidence.
+Never invent pricing or availability. Say "verify with supplier" when needed.`
+          },
+          {
+            role: "user",
+            content: `Question: ${q}
+
+Context:
+${JSON.stringify(context, null, 2)}`
+          }
+        ]
+      });
+
+      const text = response.output_text || (response.output || []).map(o => {
+        if (o.content) return o.content.map(c => c.text || "").join("\n");
+        return "";
+      }).join("\n");
+      if (text) return text;
+    } catch (err) {
+      console.error("OPENAI_WEB_SEARCH_FALLBACK", err.message);
+    }
+  }
+
+  // Fallback: normal AI answer with current-info warning.
+  const completion = await openai.chat.completions.create({
+    model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+    messages: [
+      { role: "system", content: `${systemPrompt()}
+You are in SEARCH MODE.
+If live web search is unavailable, be transparent.
+For parts, suppliers, prices, weather, or current data, say what must be verified.
+Format with headings and bullets.` },
+      { role: "user", content: `Search request:
+${q}
+
+Context:
+${JSON.stringify(context, null, 2)}` }
+    ],
+    temperature: 0.15
+  });
+  return completion.choices?.[0]?.message?.content || "";
+}
+
+function rwFormatSearchAnswer(title, body, source="search_engine_v1_5"){
+  return `# ${title}
+
+${body}
+
+## Search Status
+- **Route:** ${source}
+- **Note:** Verify live prices, inventory, fitment, VIN/ESN, and supplier availability before ordering.`;
+}
+
+async function rwSupplierSearch(q, context = {}) {
+  const location = context.location || context.userLocation || "Northern Indiana";
+  const expanded = `${q} supplier price availability near ${location}`;
+  const answer = await rwOpenAIWebSearch(expanded, context);
+  return rwFormatSearchAnswer("Supplier / Local Search", answer, "supplier_search_v1_5");
+}
+
 app.get("/", (req, res) => {
   res.json({
     ok: true,
@@ -318,216 +402,68 @@ app.post("/api/vision", async (req, res) => {
   }
 });
 
+
+app.get("/api/search", (req, res) => {
+  res.json({
+    ok: true,
+    endpoint: "/api/search",
+    version: "search_engine_v1_5",
+    methods: ["GET", "POST"],
+    routes: ["weather", "supplier", "parts", "current", "general"],
+    examples: [
+      { prompt: "weather Albion, IN" },
+      { prompt: "Find 3101874 cross reference and supplier near me" },
+      { prompt: "Cummins X15 water pump supplier near Albion Indiana" }
+    ]
+  });
+});
+
 app.post("/api/search", async (req, res) => {
   try {
     const q = req.body.prompt || req.body.query || req.body.question || "";
+    const context = req.body.context || {};
     if (!q) return res.status(400).json({ error: "Missing query." });
 
-    if (isWeatherQuery(q)) {
-      const answer = await getWeatherAnswer(q);
-      return res.json({ answer, source: "open-meteo" });
+    const intent = rwSearchIntent(q);
+
+    if (intent === "weather" && typeof getWeatherAnswer === "function") {
+      try {
+        const answer = await getWeatherAnswer(q);
+        return res.json({ answer, route: "weather", source: "open_meteo" });
+      } catch (err) {
+        console.error("WEATHER_FALLBACK_TO_WEB", err.message);
+      }
     }
 
-    if (process.env.WEB_SEARCH_ENDPOINT) {
-      const r = await fetch(process.env.WEB_SEARCH_ENDPOINT, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(process.env.WEB_SEARCH_KEY ? { Authorization: `Bearer ${process.env.WEB_SEARCH_KEY}` } : {})
-        },
-        body: JSON.stringify(req.body)
-      });
-      const data = await r.json();
-      return res.json({ answer: normalizeAnswer(data), raw: data });
+    if (intent === "supplier") {
+      const answer = await rwSupplierSearch(q, context);
+      return res.json({ answer, route: "supplier", source: "search_engine_v1_5" });
     }
 
-    if (!openai) return res.status(500).json({ error: "Search endpoint and OpenAI are not configured." });
-    const completion = await openai.chat.completions.create({
-      model: process.env.OPENAI_MODEL || "gpt-4o-mini",
-      messages: [
-        { role: "system", content: systemPrompt() },
-        { role: "user", content: `The user asked: ${q}\nAnswer normally using your built-in knowledge. If the answer requires live/current data besides weather, clearly say live web search is not connected yet.` }
-      ],
-      temperature: 0.2
+    const answer = await rwOpenAIWebSearch(q, context);
+    res.json({
+      answer: rwFormatSearchAnswer(intent === "current" ? "Current Search" : "Search Result", answer, "openai_web_search_v1_5"),
+      route: intent,
+      source: "search_engine_v1_5"
     });
-    res.json({ answer: completion.choices?.[0]?.message?.content || "" });
   } catch (err) {
     console.error("SEARCH_ERROR", err);
     res.status(500).json({ error: err.message });
   }
 });
 
-
-
-/* ===== V1.3 PARTS MASTER EXTENSION ===== */
-const PARTS_MASTER = {
-  "3101874": {
-    query: "3101874",
-    category: "Filter",
-    type: "Oil filter / filter element",
-    confidence: "High for seeded cross-reference; verify application",
-    crosses: [
-      { brand: "Fleetguard", part_number: "LF634" },
-      { brand: "WIX", part_number: "51487" },
-      { brand: "NAPA", part_number: "1487" },
-      { brand: "Donaldson", part_number: "P550487" },
-      { brand: "Baldwin", part_number: "PT903" },
-      { brand: "Luber-Finer", part_number: "LP487" }
-    ],
-    oem: [
-      { brand: "Volvo", part_number: "3101874" },
-      { brand: "White", part_number: "3101874" },
-      { brand: "Volvo", part_number: "874487" },
-      { brand: "Cummins", part_number: "299634" },
-      { brand: "Case IH", part_number: "279294C91 / 279294C92" },
-      { brand: "Caterpillar", part_number: "3I1187" }
-    ],
-    verify: ["Old part label", "Thread/seal size", "Filter dimensions", "Application", "VIN/ESN"]
-  },
-  "LF634": {
-    query: "LF634",
-    category: "Filter",
-    type: "Fleetguard oil filter",
-    confidence: "High seeded cross-reference",
-    crosses: [
-      { brand: "Volvo/White", part_number: "3101874" },
-      { brand: "WIX", part_number: "51487" },
-      { brand: "NAPA", part_number: "1487" },
-      { brand: "Donaldson", part_number: "P550487" },
-      { brand: "Baldwin", part_number: "PT903" }
-    ],
-    oem: [{ brand: "Fleetguard", part_number: "LF634" }],
-    verify: ["Application", "Dimensions", "Seal/thread", "Old filter"]
-  },
-  "LF14000NN": {
-    query: "LF14000NN",
-    category: "Filter",
-    type: "Fleetguard lube filter, NanoNet style",
-    confidence: "Common heavy-duty Cummins filter number; verify by ESN",
-    crosses: [{ brand: "Fleetguard", part_number: "LF14000NN" }],
-    oem: [{ brand: "Cummins/Fleetguard", part_number: "LF14000NN" }],
-    verify: ["Engine serial number", "Filter head style", "Current filter label"]
-  },
-  "FS19727": {
-    query: "FS19727",
-    category: "Filter",
-    type: "Fleetguard fuel/water separator",
-    confidence: "Seeded common filter reference",
-    crosses: [
-      { brand: "Fleetguard", part_number: "FS19727" },
-      { brand: "NAPA", part_number: "3727" }
-    ],
-    oem: [{ brand: "Fleetguard", part_number: "FS19727" }],
-    verify: ["Micron rating", "Bowl/sensor style", "Thread", "Old filter"]
-  }
-};
-
-function findPartsMaster(q) {
-  const tokens = extractPartNumbers(q).map(x => String(x).replace(/[^A-Z0-9]/gi, "").toUpperCase());
-  for (const t of tokens) {
-    if (PARTS_MASTER[t]) return PARTS_MASTER[t];
-  }
-  return null;
-}
-
-function formatPartsMasterAnswer(p) {
-  const crosses = (p.crosses || []).map(x => `- **${x.brand}:** ${x.part_number}`).join("\n") || "- No verified crosses in local database.";
-  const oem = (p.oem || []).map(x => `- **${x.brand}:** ${x.part_number}`).join("\n") || "- No OEM references in local database.";
-  const verify = (p.verify || []).map(x => `- ${x}`).join("\n");
-  return `# Parts Master Result — ${p.query}
-
-## Identification
-- **Category:** ${p.category || "Unknown"}
-- **Type:** ${p.type || "Unknown"}
-- **Confidence:** ${p.confidence || "Verify before purchase"}
-
-## Cross References
-${crosses}
-
-## OEM / Related References
-${oem}
-
-## Verify Before Ordering
-${verify}
-
-## Supplier Script
-“Can you cross-reference **${p.query}** and verify it by application, dimensions, and old part label?”
-
-## Rolling Wrench Note
-Do not order by cross-reference alone. Confirm VIN/ESN/application and compare the old part.`;
-}
-
-function isWaterPumpRequest(q) {
-  const s = String(q || "").toLowerCase();
-  return s.includes("water pump") || s.includes("waterpump");
-}
-
-function formatWaterPumpRequest(q, context = {}) {
-  const truck = context.truck || {};
-  return `# Parts Master — Water Pump Request
-
-## Need More Info
-To give the correct OEM water pump number, I need one of these:
-
-- **Engine Serial Number (ESN)**
-- **VIN**
-- **Old water pump part number**
-- **Photo of pump label or casting**
-- **Truck year / make / model**
-- **Engine CPL**, if available
-
-## Current Context
-- **Engine:** ${truck.engine || "Not set"}
-- **Truck:** ${truck.unit || "Not set"}
-- **VIN:** ${truck.vin || "Not set"}
-
-## Why I’m Not Guessing
-Cummins X15/ISX water pumps can vary by engine serial number, CPL, pulley/housing style, chassis package, coolant pipe configuration, and reman/new option.
-
-## Supplier Script
-“I need the correct water pump for a Cummins X15. I can provide VIN/ESN. Please verify pump number, gasket/O-ring, pulley fitment, and core/reman option.”
-
-## Next Step
-Send the VIN, ESN, or a photo of the old pump label and I’ll cross-reference it.`;
-}
-
-
-app.get("/api/vin", (req, res) => {
-  res.json({ ok:true, endpoint:"/api/vin", version:"vin_decoder_v1_4", method:"POST" });
-});
-
-app.post("/api/vin", async (req, res) => {
-  try {
-    const vin = rwCleanVin(req.body.vin || rwExtractVin(req.body.prompt || req.body.question || ""));
-    if(!rwIsVin(vin)) return res.status(400).json({ error:"No valid 17-character VIN found." });
-    const truck = rwDecodeVin(vin);
-    res.json({ ok:true, truck, answer:rwFormatVin(truck), source:"vin_decoder_v1_4" });
-  } catch(err) {
-    console.error("VIN_ERROR", err);
-    res.status(500).json({ error:err.message });
-  }
-});
-
-app.get("/api/parts", (req, res) => {
-  res.json({
-    ok: true,
-    endpoint: "/api/parts",
-    version: "parts_master_v1_3",
-    method: "POST",
-    seeded_parts: Object.keys(PARTS_MASTER),
-    examples: [
-      { prompt: "3101874 cross reference" },
-      { prompt: "LF634 cross reference" },
-      { prompt: "Cummins X15 water pump" },
-      { prompt: "FS19727 cross reference" }
-    ]
-  });
-});
-
 app.post("/api/parts", async (req, res) => {
   try {
     const q = req.body.prompt || req.body.query || req.body.question || "";
     const context = req.body.context || {};
+
+    /* PARTS_SEARCH_ENGINE_V1_5_HOOK */
+    if (/\b(near me|nearby|local|supplier|buy|price|availability|in stock|dealer|store)\b/i.test(q)) {
+      const answer = await rwSupplierSearch(q, context);
+      return res.json({ answer, source: "parts_supplier_search_v1_5" });
+    }
+
+
 
     const master = findPartsMaster(q);
     if (master) {

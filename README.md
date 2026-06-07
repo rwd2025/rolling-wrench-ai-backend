@@ -84,3 +84,11 @@ For first test, Render/Railway is easiest.
 - Adds supplier scripts and verification checklist.
 
 V1.4: Adds /api/vin basic VIN decoder and Active Truck response.
+
+## V1.5 Search Engine Layer
+- Adds GET /api/search status endpoint.
+- Upgrades POST /api/search routing: weather, supplier/local, parts/current/general.
+- Attempts OpenAI Responses API web_search_preview when SDK/model supports it.
+- Falls back to OpenAI chat response with verification warnings.
+- Hooks supplier/local requests inside /api/parts.
+- Goal: ChatGPT/Gemini/Google-style search behavior through Render backend.
