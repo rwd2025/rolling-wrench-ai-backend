@@ -452,6 +452,95 @@ app.post("/api/search", async (req, res) => {
   }
 });
 
+
+/* ===== V1.5a findPartsMaster compatibility hotfix ===== */
+function findPartsMaster(q) {
+  try {
+    if (typeof findSeededPart === "function") {
+      const seeded = findSeededPart(q);
+      if (seeded) return seeded;
+    }
+
+    const text = String(q || "").toUpperCase();
+    const nums = text.match(/\b[A-Z0-9-]{4,}\b/g) || [];
+    const cleanNums = nums.map(n => String(n).replace(/[^A-Z0-9]/g, ""));
+
+    if (typeof PARTS_MASTER !== "undefined") {
+      for (const n of cleanNums) {
+        if (PARTS_MASTER[n]) return PARTS_MASTER[n];
+      }
+    }
+
+    if (typeof SEEDED_PARTS !== "undefined") {
+      for (const n of cleanNums) {
+        if (SEEDED_PARTS[n]) return SEEDED_PARTS[n];
+      }
+    }
+
+    return null;
+  } catch (err) {
+    console.error("findPartsMaster hotfix error", err);
+    return null;
+  }
+}
+
+function formatPartsMasterResult(part, q) {
+  if (!part) {
+    return `# Parts Master Result
+
+## No Verified Match Found
+No verified local Parts Master match was found for **${q || "this request"}**.
+
+## Need To Verify
+- VIN
+- ESN
+- Old part label
+- Application
+- Dimensions
+- Supplier catalog
+
+## Rolling Wrench Note
+Do not guess part numbers. Verify before ordering.`;
+  }
+
+  if (typeof formatPartsMasterAnswer === "function") {
+    try { return formatPartsMasterAnswer(part, q); } catch(e) {}
+  }
+  if (typeof formatSeededPartAnswer === "function") {
+    try { return formatSeededPartAnswer(part, q); } catch(e) {}
+  }
+
+  const crosses = (part.crosses || part.crossReferences || []).map(x => {
+    if (typeof x === "string") return `- ${x}`;
+    return `- **${x.brand || x.make || "Cross"}:** ${x.part_number || x.partNumber || x.number || ""}`;
+  }).join("\n") || "- No cross references listed.";
+
+  const oem = (part.oem || part.oem_refs || part.oemRefs || []).map(x => {
+    if (typeof x === "string") return `- ${x}`;
+    return `- **${x.brand || x.make || "OEM"}:** ${x.part_number || x.partNumber || x.number || ""}`;
+  }).join("\n") || "- No OEM references listed.";
+
+  return `# Parts Master Result — ${part.query || part.part_number || part.partNumber || q || "Part"}
+
+## Identification
+- **Category:** ${part.category || "Unknown"}
+- **Type:** ${part.type || part.part_type || "Unknown"}
+- **Confidence:** ${part.confidence || "Verify before purchase"}
+
+## Cross References
+${crosses}
+
+## OEM / Related References
+${oem}
+
+## Verify Before Ordering
+- VIN / ESN
+- Old part label
+- Dimensions
+- Application
+- Supplier catalog`;
+}
+
 app.post("/api/parts", async (req, res) => {
   try {
     const q = req.body.prompt || req.body.query || req.body.question || "";

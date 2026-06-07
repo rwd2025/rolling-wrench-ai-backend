@@ -92,3 +92,7 @@ V1.4: Adds /api/vin basic VIN decoder and Active Truck response.
 - Falls back to OpenAI chat response with verification warnings.
 - Hooks supplier/local requests inside /api/parts.
 - Goal: ChatGPT/Gemini/Google-style search behavior through Render backend.
+
+## V1.5a Hotfix
+- Adds findPartsMaster() compatibility function.
+- Prevents ReferenceError: findPartsMaster is not defined.
